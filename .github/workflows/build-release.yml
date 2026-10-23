@@ -5,13 +5,13 @@ root = Path("/mnt/data/beikeshop-github-actions-fix")
 wf = root / ".github" / "workflows"
 wf.mkdir(parents=True, exist_ok=True)
 
-content = r"""name: Build BeikeShop deployment ZIP
+name: Build BeikeShop deployment ZIP
 
 'on':
   workflow_dispatch:
     inputs:
       ref:
-        description: '要构建的分支、tag 或 commit SHA；留空则构建当前触发的版本'
+        description: '要构建的分支、tag 或 commit SHA'
         required: false
         type: string
   push:
