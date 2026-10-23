@@ -1,17 +1,11 @@
-from pathlib import Path
-import zipfile, os
-
-root = Path("/mnt/data/beikeshop-github-actions-fix")
-wf = root / ".github" / "workflows"
-wf.mkdir(parents=True, exist_ok=True)
-
+```yaml
 name: Build BeikeShop deployment ZIP
 
 'on':
   workflow_dispatch:
     inputs:
       ref:
-        description: '要构建的分支、tag 或 commit SHA'
+        description: '要构建的分支、tag 或 commit SHA，留空则使用当前分支'
         required: false
         type: string
   push:
@@ -27,11 +21,13 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # 1. 获取源码
       - name: Checkout source
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      # 2. 配置 PHP 8.3
       - name: Set up PHP 8.3
         uses: shivammathur/setup-php@v2
         with:
@@ -40,12 +36,13 @@ jobs:
           extensions: bcmath, ctype, curl, dom, fileinfo, gd, iconv, intl, json, mbstring, openssl, pcntl, pdo_mysql, simplexml, tokenizer, xml, zip
           coverage: none
 
+      # 3. 配置 Node.js
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
 
+      # 4. 检查环境
       - name: Show build versions
         run: |
           php -v
@@ -53,20 +50,49 @@ jobs:
           node --version
           npm --version
 
+      # 5. 安装 PHP 生产依赖
       - name: Install production PHP dependencies
         run: composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
 
+      # 6. 安装前端依赖
       - name: Install frontend dependencies
-        run: npm ci
+        shell: bash
+        run: |
+          set -Eeuo pipefail
 
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f npm-shrinkwrap.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      # 7. 编译前端资源
       - name: Build frontend assets
-        run: npm run prod
+        shell: bash
+        run: |
+          set -Eeuo pipefail
 
+          node -e "const p=require('./package.json'); console.log('Available npm scripts:', p.scripts || {})"
+
+          npm run prod
+
+      # 8. 准备宝塔部署包
       - name: Prepare deployment package
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p dist/package
+
+          ZIP_NAME="beikeshop-baota-php83-mysql80-${GITHUB_SHA::12}.zip"
+
+          mkdir -p \
+            dist/package/beikeshop/storage/framework/cache/data \
+            dist/package/beikeshop/storage/framework/sessions \
+            dist/package/beikeshop/storage/framework/views \
+            dist/package/beikeshop/storage/logs \
+            dist/package/beikeshop/bootstrap/cache
+
           rsync -a ./ dist/package/beikeshop/ \
             --exclude='.git/' \
             --exclude='.github/' \
@@ -79,19 +105,20 @@ jobs:
             --exclude='storage/framework/sessions/*' \
             --exclude='storage/framework/views/*' \
             --exclude='dist/'
-          mkdir -p \
-            dist/package/beikeshop/storage/framework/cache/data \
-            dist/package/beikeshop/storage/framework/sessions \
-            dist/package/beikeshop/storage/framework/views \
-            dist/package/beikeshop/storage/logs \
-            dist/package/beikeshop/bootstrap/cache
-          cd dist/package
-          ZIP_NAME="beikeshop-baota-php83-mysql80-${GITHUB_SHA::12}.zip"
-          zip -qr "../${ZIP_NAME}" beikeshop
-          cd ../..
-          sha256sum "${ZIP_NAME}" > SHA256SUMS.txt
-          mv "${ZIP_NAME}" dist/
 
+          mkdir -p dist
+
+          (
+            cd dist/package
+            zip -qr "../${ZIP_NAME}" beikeshop
+          )
+
+          sha256sum "dist/${ZIP_NAME}" > dist/SHA256SUMS.txt
+
+          echo "Deployment package created:"
+          ls -lh "dist/${ZIP_NAME}" dist/SHA256SUMS.txt
+
+      # 9. 上传构建产物
       - name: Upload deployment ZIP
         uses: actions/upload-artifact@v4
         with:
@@ -101,26 +128,4 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
-"""
-(root / ".github" / "workflows" / "build-release.yml").write_text(content, encoding="utf-8")
-readme = """# BeikeShop GitHub Actions 工作流修正版
-
-请用本包中的 `.github/workflows/build-release.yml` 完整替换你仓库里的同名文件，不要只替换几行。
-
-关键修正：把 YAML 的 `on:` 写成 `'on':`，避免部分 YAML 1.1 解析器将 `on` 识别为布尔值。GitHub Actions 支持该写法。
-
-操作：
-1. 在 GitHub 仓库打开 `.github/workflows/build-release.yml`。
-2. 点击铅笔编辑按钮。
-3. 全选并替换为此包里的完整文件内容。
-4. Commit changes。
-5. 进入 Actions 再运行工作流。
-
-注意：如果 YAML 错误消失但后续构建失败，需看 Actions 运行日志。源码仓库的实际 `package.json` 是否提供 `npm run prod`、是否存在 `package-lock.json`，以及 Composer 依赖是否可在 PHP 8.3 下安装，仍需由首次构建日志验证。
-"""
-(root / "README.md").write_text(readme, encoding="utf-8")
-out = "/mnt/data/beikeshop-github-actions-workflow-fixed.zip"
-with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-    z.write(root / "README.md", "README.md")
-    z.write(root / ".github" / "workflows" / "build-release.yml", ".github/workflows/build-release.yml")
-print(out, os.path.getsize(out))
+```
